@@ -66,6 +66,49 @@ export function setDynamicParserResultNotifier(fn: (() => void) | null): void {
   resultNotifier = fn;
 }
 
+// Coalesce result notifications. The sandboxed parser resolves one worker
+// response PER LINE, and each resolution used to fire `resultNotifier`
+// immediately — for a live run streaming thousands of one-token lines that is
+// one adapter-change tick (hence one full transcript recompute + re-render)
+// per line, a self-sustaining storm that keeps the issue page hot and
+// amplifies the surrounding polling. Batch every notification that lands
+// within the same frame into a single flush: N resolved lines produce ONE
+// tick. Correctness is unchanged — the notifier only asks consumers to
+// recompute from cache, so collapsing a burst loses no data, just redundant
+// recomputations.
+let notifyScheduled = false;
+
+function scheduleResultNotification(): void {
+  if (notifyScheduled) return;
+  notifyScheduled = true;
+  const flush = () => {
+    notifyScheduled = false;
+    resultNotifier?.();
+  };
+  // rAF coalesces to one tick per painted frame when a tab is visible; the
+  // setTimeout fallback keeps background tabs (where rAF is throttled/paused)
+  // from deferring the flush indefinitely. Whichever fires first wins; the
+  // guard above makes the second a no-op.
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(flush);
+  } else {
+    setTimeout(flush, 16);
+  }
+}
+
+/** Test-only: schedule a coalesced notification (as a resolved worker line would). */
+export function scheduleResultNotificationForTest(): void {
+  scheduleResultNotification();
+}
+
+/** Test-only: drain any pending coalesced notification synchronously. */
+export function flushDynamicParserNotificationsForTest(): void {
+  if (notifyScheduled) {
+    notifyScheduled = false;
+    resultNotifier?.();
+  }
+}
+
 // ── Internal helpers ────────────────────────────────────────────────────────
 
 function sendToWorker(sandbox: SandboxedParser, msg: SandboxRequest): void {
@@ -81,7 +124,7 @@ function lineCacheKey(line: string, ts: string): string {
 }
 
 function notifyResultReady(): void {
-  resultNotifier?.();
+  scheduleResultNotification();
 }
 
 /**
