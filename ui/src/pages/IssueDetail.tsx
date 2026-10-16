@@ -7901,7 +7901,7 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
                   onRetry: (actionId) => retryDispositionRecovery.mutateAsync(actionId).then(() => undefined),
                 }}>
                 <IssueDetailChatTab
-                  queryIssueId={issueId ?? issue.id}
+                  queryIssueId={issue.id ?? issueId}
                   onOpenSkill={handleOpenSkill}
                   browsers={browserQuery.data}
                   onOpenBrowser={(id) => { setOpenBrowserId(id); if (isMobile) setMobilePropsOpen(true); else openTaskSidePanel(); }}
