@@ -25053,6 +25053,15 @@ export function heartbeatService(
               runtimeMcpServers.unshift({ name: "Paperclip projects", url: `${paperclipApiBaseUrl()}/api/mcp/project-tools`,
                 token: authToken, connectionId: "paperclip-project-tools" });
             }
+            // Read-only, company-scoped discovery tools. Injected for ANY legacy
+            // run with a local agent JWT — including timer/heartbeat wakes that
+            // carry no issue — so the agent never wakes blind: it can always look
+            // up the tasks assigned to it, read one, and see pending approvals.
+            // Writes/task creation remain issue-bound in "Paperclip projects".
+            if (authToken && configuredPaperclipApiBaseUrl()) {
+              runtimeMcpServers.unshift({ name: "Paperclip discovery", url: `${paperclipApiBaseUrl()}/api/mcp/discovery-tools`,
+                token: authToken, connectionId: "paperclip-discovery-tools" });
+            }
             const runtimeMcp = createAdapterRuntimeMcpAccess(runtimeMcpServers);
             if (runtimeTools && runtimeToolDelivery === "invocation_context") {
               adapterContext.paperclipRuntimeTools = runtimeTools;
