@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getUIAdapter } from "../registry";
+import { getUIAdapter, syncExternalAdapters } from "../registry";
 import { buildTranscript } from "../transcript";
 import { kiroLocalUIAdapter } from "./index";
 
@@ -53,5 +53,22 @@ describe("kiro_local builtin UI adapter", () => {
     expect(kinds).toContain("assistant");
     expect(kinds).toContain("tool_call");
     expect(kinds).not.toContain("stdout");
+  });
+
+  it("NÃO é sobrescrito quando o servidor lista kiro_local como external adapter", () => {
+    // Regressão: kiro_local é builtin com o parser ACPX canônico. Se o server o
+    // lista como external (com ui-parser.js), o override NÃO pode trocar o
+    // builtin pelo bridge do dynamic-loader (Web Worker), que regride o activity.
+    syncExternalAdapters([{ type: "kiro_local", label: "Kiro" }]);
+    try {
+      const adapter = getUIAdapter("kiro_local");
+      expect(adapter).toBe(kiroLocalUIAdapter);
+      // E continua parseando acpx síncrono (não virou bridge que retorna []).
+      const entries = adapter.parseStdoutLine(TEXT_DELTA, "2026-10-18T15:18:08.353Z");
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.kind).toBe("assistant");
+    } finally {
+      syncExternalAdapters([]);
+    }
   });
 });
