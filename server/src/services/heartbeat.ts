@@ -4909,7 +4909,11 @@ export async function buildPaperclipRuntimeMcpServers(input: {
       subjectId: input.runId,
       clientLabel: `${input.agent.name} heartbeat run`,
       ownerNote: `Short-lived runtime MCP token for heartbeat run ${input.runId}.`,
-      allowedActions: ["tools/list", "tools/call"],
+      // Read-only context actions (resources/prompts) are safe: with no
+      // fully-assigned external MCP connection they return an empty list, not a
+      // permission error. Keeping them out made list_resources/list_prompts
+      // (always advertised in tools/list) fail with gateway_token_action_denied.
+      allowedActions: ["tools/list", "tools/call", "resources/list", "resources/read", "prompts/list", "prompts/get"],
       expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
     },
     actor: { agentId: input.agent.id },
@@ -5230,7 +5234,12 @@ export async function createManagedMcpRunConfig(input: {
         subjectId: input.runId,
         clientLabel: `${input.agent.name} managed local adapter`,
         ownerNote: `Short-lived Paperclip-managed MCP token for heartbeat run ${input.runId}.`,
-        allowedActions: ["tools/list", "tools/call"],
+        // Include the read-only context actions (resources/prompts). They are
+        // safe by construction: with no fully-assigned external MCP connection
+        // they return an empty list, never a permission error. Omitting them
+        // made the always-exposed list_resources/list_prompts tools fail with
+        // gateway_token_action_denied instead of returning empty.
+        allowedActions: ["tools/list", "tools/call", "resources/list", "resources/read", "prompts/list", "prompts/get"],
         expiresAt,
       },
       actor: { agentId: input.agent.id },
