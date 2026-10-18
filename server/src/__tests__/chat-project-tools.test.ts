@@ -1,5 +1,5 @@
 import { projectService } from "../services/projects.js";
-import { callProjectTool } from "../services/project-tools.js";
+import { callProjectTool, projectToolDefinitions } from "../services/project-tools.js";
 import { createLocalAgentJwt } from "../agent-auth-jwt.js";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -121,6 +121,26 @@ const support = await getEmbeddedPostgresTestSupport();
       companyId: f.companyId, issueId: f.issueId, agentId: f.agentId, conversation: true });
     expect(result).toMatchObject({ parentId: null, projectId: f.projectId, assigneeAgentId: f.agentId });
     expect((await documentService(server.db).getIssueDocumentByKey(result.id, "plan"))?.body).toContain("Implement in the execution task");
+  });
+
+  it("persists a durable deliverable via write_document so it survives the ephemeral workspace", async () => {
+    const f = await server.fixture({ conversation: false });
+    const token = createLocalAgentJwt(f.agentId, f.companyId, "paperclip_runner", f.runId, f.responsibleUserId)!;
+    const base = { apiUrl: server.apiUrl, token, companyId: f.companyId, issueId: f.issueId, agentId: f.agentId, conversation: false };
+    // write_document is exposed as a task-scoped project tool.
+    const defs = projectToolDefinitions("standard", true);
+    expect(defs.some(d => d.name === "write_document")).toBe(true);
+
+    const first = await callProjectTool({ ...base, name: "write_document", arguments: { key: "discovery", title: "Discovery", body: "# Discovery\nConteúdo durável." } });
+    expect(first).toMatchObject({ key: "discovery" });
+    expect((await documentService(server.db).getIssueDocumentByKey(f.issueId, "discovery"))?.body).toContain("Conteúdo durável");
+
+    // Re-calling with the same key updates (upserts) the document.
+    await callProjectTool({ ...base, name: "write_document", arguments: { key: "discovery", title: "Discovery v2", body: "# Discovery\nRevisado." } });
+    expect((await documentService(server.db).getIssueDocumentByKey(f.issueId, "discovery"))?.body).toContain("Revisado");
+
+    // The key is normalized to a lowercase slug and invalid keys are rejected.
+    await expect(callProjectTool({ ...base, name: "write_document", arguments: { key: "Not A Slug!", body: "x" } })).rejects.toThrow();
   });
 
   it("allows low-trust chat handoffs and self-assigned subtasks through both creation endpoints", async () => {
