@@ -61,6 +61,63 @@ describe("runner semantic MCP bridge", () => {
     });
   });
 
+  it("strips top-level schema combinators from advertised schemas when requested, keeping validation", async () => {
+    const conditionalTool = {
+      name: "request_human_input",
+      inputSchema: {
+        allOf: [
+          {
+            if: { properties: { interactionKind: { const: "question" } } },
+            then: { required: ["payload"] },
+          },
+        ],
+        type: "object",
+        properties: {
+          interactionKind: { type: "string" },
+          payload: { type: "object" },
+        },
+        required: ["interactionKind"],
+        additionalProperties: false,
+      },
+    };
+    const bridge = await startRunnerToolBridge({
+      secret: "session-secret",
+      tools: [conditionalTool],
+      stripTopLevelSchemaCombinators: true,
+      handler: async () => ({ ok: true }),
+    });
+    bridges.push(bridge);
+
+    const listed = (await (
+      await rpc(bridge, { id: 1, method: "tools/list" })
+    ).json()) as {
+      result: { tools: Array<{ name: string; inputSchema: Record<string, unknown> }> };
+    };
+    const advertised = listed.result.tools.find(
+      (t) => t.name === "request_human_input",
+    )!;
+    // No root-level combinator survives in the advertised schema.
+    expect(advertised.inputSchema.allOf).toBeUndefined();
+    expect(advertised.inputSchema.oneOf).toBeUndefined();
+    expect(advertised.inputSchema.anyOf).toBeUndefined();
+    // The base object shape is preserved.
+    expect(advertised.inputSchema.type).toBe("object");
+    expect(advertised.inputSchema.properties).toMatchObject({
+      interactionKind: { type: "string" },
+    });
+
+    // Validation still rejects arguments that violate the ORIGINAL schema
+    // (missing required property), proving the validator uses the full schema.
+    const invalid = (await (
+      await rpc(bridge, {
+        id: "call-invalid",
+        method: "tools/call",
+        params: { name: "request_human_input", arguments: {} },
+      })
+    ).json()) as { result: { content: Array<{ text: string }> } };
+    expect(invalid.result.content[0]!.text).toContain("Invalid tool input");
+  });
+
   it("keeps private operations callable but undiscoverable", async () => {
     const handler = vi.fn(async ({ tool: name }) => ({ name }));
     const bridge = await startRunnerToolBridge({

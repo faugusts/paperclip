@@ -41,6 +41,14 @@ export interface RunnerToolBridgeOptions {
   /** Internal test seam; production bounds headers and body reads to 30 seconds. */
   requestBodyTimeoutMs?: number;
   secret?: string;
+  /**
+   * Some model backends (e.g. Kiro/CodeWhisperer) reject a tool whose
+   * input_schema has a top-level `oneOf`/`allOf`/`anyOf`. When set, the schemas
+   * advertised via `tools/list` have those root-level combinators stripped.
+   * Argument validation still compiles from the original, unmodified schema, so
+   * conditional refinements continue to apply to actual tool calls.
+   */
+  stripTopLevelSchemaCombinators?: boolean;
 }
 
 export interface RunnerToolBridge {
@@ -112,12 +120,19 @@ export async function startRunnerToolBridge(
   }
   const visibleTools = [...tools, ...structuredClone(RESERVED_TOOLS)];
   const admittedTools = [...visibleTools, ...privateTools];
+  // Validators enforce the ORIGINAL schemas (including any top-level conditional
+  // combinators) on real tool-call arguments.
   const validators = compileValidators(admittedTools);
+  // Some providers reject top-level schema combinators; advertise a sanitized
+  // copy over tools/list while keeping the validators above authoritative.
+  const advertisedTools = options.stripTopLevelSchemaCombinators
+    ? visibleTools.map(stripTopLevelSchemaCombinators)
+    : visibleTools;
   const calls = new Map<string, AdmittedCall>();
   const controllers = new Map<string, AbortController>();
   const context = {
     secret,
-    visibleTools,
+    visibleTools: advertisedTools,
     admittedTools: new Map(admittedTools.map((tool) => [tool.name, tool])),
     validators,
     calls,
@@ -386,6 +401,38 @@ function normalizeTools(
     seen.add(name);
   }
   return tools;
+}
+
+/**
+ * Produce an advertised copy of a tool whose root input schema has no top-level
+ * `oneOf`/`allOf`/`anyOf`. Some model backends (Kiro/CodeWhisperer) reject those
+ * root combinators. We drop only the root-level combinator keys (they are, in
+ * our catalog, conditional refinements such as an if/then wrapped in allOf);
+ * the base object schema (type/properties/required) is preserved, and the
+ * bridge's Ajv validators still enforce the original full schema on real calls.
+ */
+function stripTopLevelSchemaCombinators(
+  tool: RunnerToolDefinition,
+): RunnerToolDefinition {
+  const schema = tool.inputSchema;
+  if (
+    !isRecord(schema) ||
+    (schema.oneOf === undefined &&
+      schema.allOf === undefined &&
+      schema.anyOf === undefined)
+  ) {
+    return tool;
+  }
+  const sanitized: Record<string, unknown> = { ...schema };
+  delete sanitized.oneOf;
+  delete sanitized.allOf;
+  delete sanitized.anyOf;
+  // A schema that was ONLY a combinator must still describe an object so the
+  // provider receives a usable tool shape.
+  if (sanitized.type === undefined && sanitized.properties === undefined) {
+    sanitized.type = "object";
+  }
+  return { ...tool, inputSchema: sanitized };
 }
 
 function compileValidators(
