@@ -458,6 +458,46 @@ export async function prepareAcpxRuntimeSandbox(input: {
     );
   }
 
+  // Kiro authenticates through the machine-wide kiro-cli SSO session persisted
+  // at $XDG_DATA_HOME/kiro-cli/data.sqlite3. Unlike grok/codex (per-run managed
+  // credentials), there is a single container SSO identity shared by every kiro
+  // agent, and kiro-cli coordinates concurrent access with its own
+  // kiro-cli/.refresh.lock. A fresh sandbox data dir would present an empty,
+  // unauthenticated store, so kiro-cli exits ("not logged in") before it can
+  // answer ACP initialize. Point kiro's XDG_DATA_HOME at the canonical data
+  // home so the live session — including short-lived token refreshes written
+  // back by kiro-cli — stays coherent. HOME/config/cache remain sandbox-private.
+  let kiroCanonicalDataHome: string | null = null;
+  if (input.agent === "kiro") {
+    const ambientHome = input.environment?.HOME;
+    if (typeof ambientHome !== "string" || !isAbsolute(ambientHome)) {
+      throw new Error(
+        "Kiro ACPX launch requires an absolute HOME to locate the kiro-cli SSO session",
+      );
+    }
+    const candidate = join(ambientHome, ".local", "share");
+    let physical: string;
+    try {
+      physical = await realpath(candidate);
+    } catch {
+      throw new Error(
+        `Kiro SSO data home is unavailable: provision a kiro-cli login under ${candidate}`,
+      );
+    }
+    const sessionStore = join(physical, "kiro-cli", "data.sqlite3");
+    try {
+      const entry = await stat(sessionStore);
+      if (!entry.isFile() || entry.size === 0) {
+        throw new Error("empty");
+      }
+    } catch {
+      throw new Error(
+        `Kiro kiro-cli SSO session is missing or empty at ${sessionStore}; run \`kiro-cli login\` in the container`,
+      );
+    }
+    kiroCanonicalDataHome = physical;
+  }
+
   const sanitizedSpawnInput = createSanitizedAcpxSpawnInput(
     input.environment,
     input.agent,
@@ -475,6 +515,11 @@ export async function prepareAcpxRuntimeSandbox(input: {
     XDG_CACHE_HOME: cacheDirectory,
     PAPERCLIP_ACPX_PROFILE: input.agent,
     PAPERCLIP_ACPX_ISOLATED_CONTEXT: "1",
+    // Kiro reads/writes its shared SSO session from the canonical data home;
+    // every other sandbox data need keeps the private per-run dataDirectory.
+    ...(kiroCanonicalDataHome !== null
+      ? { XDG_DATA_HOME: kiroCanonicalDataHome }
+      : {}),
     ...(input.agent === "grok" ? { GROK_HOME: agentHomeDirectory, NO_BROWSER: "1", GROK_DISABLE_AUTOUPDATER: "1" } : {}),
     ...(input.agent === "pi"
       ? {
