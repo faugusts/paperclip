@@ -15,6 +15,7 @@ import {
   realpath,
   rename,
   stat,
+  symlink,
   unlink,
   type FileHandle,
 } from "node:fs/promises";
@@ -469,6 +470,7 @@ export async function prepareAcpxRuntimeSandbox(input: {
   // home so the live session — including short-lived token refreshes written
   // back by kiro-cli — stays coherent. HOME/config/cache remain sandbox-private.
   let kiroCanonicalDataHome: string | null = null;
+  let kiroCanonicalSemanticSearch: string | null = null;
   if (input.agent === "kiro") {
     // Prefer an explicitly forwarded absolute HOME, but the ambient HOME env is
     // not always propagated to the sidecar. The runner always executes as the
@@ -505,6 +507,37 @@ export async function prepareAcpxRuntimeSandbox(input: {
       );
     }
     kiroCanonicalDataHome = physical;
+    // kiro-cli downloads its ~88 MiB embedding model to $HOME/.semantic_search
+    // on first use. HOME is a fresh per-run sandbox, so without sharing it the
+    // model is re-downloaded (and stored) every run, filling the volume. Reuse
+    // the canonical copy under the OS home when it already exists.
+    const canonicalSemantic = join(ambientHome, ".semantic_search");
+    try {
+      const entry = await stat(canonicalSemantic);
+      if (entry.isDirectory()) {
+        kiroCanonicalSemanticSearch = await realpath(canonicalSemantic);
+      }
+    } catch {
+      // No canonical model yet: let kiro-cli populate the per-run HOME this
+      // time; a later run seeds it once the canonical path exists.
+      kiroCanonicalSemanticSearch = null;
+    }
+    // Share the canonical embedding model with the per-run sandbox HOME via a
+    // symlink so kiro-cli reuses it instead of re-downloading ~88 MiB per run.
+    if (kiroCanonicalSemanticSearch !== null) {
+      try {
+        await symlink(
+          kiroCanonicalSemanticSearch,
+          join(homeDirectory, ".semantic_search"),
+        );
+      } catch (error) {
+        // A pre-existing entry (or race) must not fail sandbox preparation; the
+        // worst case is this run re-downloads the model into its private HOME.
+        if (errorCode(error) !== "EEXIST") {
+          // Non-fatal: continue without the shared model.
+        }
+      }
+    }
   }
 
   const sanitizedSpawnInput = createSanitizedAcpxSpawnInput(

@@ -74,6 +74,33 @@ describe("ACPX runtime sandbox", () => {
     expect(sandbox.launchEnvironment.XDG_DATA_HOME).not.toBe(sandbox.dataDirectory);
   });
 
+  it("shares the canonical kiro-cli embedding model into the sandbox HOME via symlink", async () => {
+    const fixture = await sandboxFixture("kiro");
+    const ambientHome = await mkdtemp(join(tmpdir(), "paperclip-kiro-home-"));
+    temporaryDirectories.push(ambientHome);
+    // Minimal valid SSO session so preparation does not reject.
+    await mkdir(join(ambientHome, ".local", "share", "kiro-cli"), { recursive: true });
+    await writeFile(join(ambientHome, ".local", "share", "kiro-cli", "data.sqlite3"), "SQLite format 3\u0000");
+    // Canonical embedding model already present under the OS home.
+    const canonicalSemantic = join(ambientHome, ".semantic_search");
+    await mkdir(join(canonicalSemantic, "models", "all-MiniLM-L6-v2"), { recursive: true });
+    await writeFile(join(canonicalSemantic, "models", "all-MiniLM-L6-v2", "model.bin"), "weights");
+    const sandbox = await prepareAcpxRuntimeSandbox({
+      binding: fixture.binding,
+      agent: "kiro",
+      environment: { HOME: ambientHome },
+    });
+    // The sandbox HOME must link .semantic_search at the canonical model so
+    // kiro-cli reuses it instead of re-downloading ~88 MiB per run.
+    const link = join(sandbox.homeDirectory, ".semantic_search");
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await realpath(link)).toBe(await realpath(canonicalSemantic));
+    // The shared model file is reachable through the link.
+    expect(
+      await readFile(join(link, "models", "all-MiniLM-L6-v2", "model.bin"), "utf8"),
+    ).toBe("weights");
+  });
+
   it("rejects Kiro launch when the kiro-cli SSO session is missing", async () => {
     const fixture = await sandboxFixture("kiro");
     const ambientHome = await mkdtemp(join(tmpdir(), "paperclip-kiro-home-"));
