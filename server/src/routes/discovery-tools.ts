@@ -2,6 +2,8 @@ import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { issueService } from "../services/issues.js";
 import { approvalService } from "../services/approvals.js";
+import { documentService } from "../services/documents.js";
+import { workProductService } from "../services/work-products.js";
 import { assertCompanyAccess } from "./authz.js";
 import { forbidden } from "../errors.js";
 
@@ -32,6 +34,8 @@ const rows = (v: unknown): unknown[] => {
 const taskFields = ["id", "companyId", "identifier", "title", "description", "status", "priority", "assigneeAgentId", "assigneeUserId", "projectId", "parentId", "createdAt", "updatedAt", "completedAt"];
 const commentFields = ["id", "issueId", "body", "authorUserId", "authorAgentId", "createdAt"];
 const approvalFields = ["id", "type", "status", "requestedByAgentId", "requestedByUserId", "issueId", "createdAt"];
+const documentFields = ["id", "issueId", "key", "title", "format", "body", "latestRevisionNumber", "updatedAt"];
+const deliverableFields = ["id", "type", "title", "url", "status", "summary", "updatedAt"];
 
 const DISCOVERY_TOOL_DEFINITIONS = [
   {
@@ -55,6 +59,29 @@ const DISCOVERY_TOOL_DEFINITIONS = [
       required: ["taskId"],
       properties: {
         taskId: { type: "string", description: "Task UUID or identifier (e.g. INT-42)." },
+      },
+    },
+  },
+  {
+    name: "list_deliverables",
+    description: "List the durable deliverables of a task: its saved documents (reports, discovery, plans — anything written with write_document) and any work-product references. Use this to discover what artifacts a related task produced, then read one with read_document. Read-only.",
+    inputSchema: {
+      type: "object",
+      required: ["taskId"],
+      properties: {
+        taskId: { type: "string", description: "Task UUID or identifier whose deliverables to list." },
+      },
+    },
+  },
+  {
+    name: "read_document",
+    description: "Read a saved task document (artifact) by its key — e.g. the 'discovery' or 'report' a sibling task produced with write_document. Documents are durable across runs and conversations. Use list_deliverables first to see available keys. This is how you read artifacts; there is no MCP 'resource' for task documents. Read-only.",
+    inputSchema: {
+      type: "object",
+      required: ["taskId", "key"],
+      properties: {
+        taskId: { type: "string", description: "Task UUID or identifier that owns the document." },
+        key: { type: "string", description: "Document key (lowercase slug, e.g. 'discovery', 'report', 'plan')." },
       },
     },
   },
@@ -106,6 +133,27 @@ export function discoveryToolRoutes(db: Db) {
         if (!issue || issue.companyId !== companyId) throw forbidden("Task is unavailable");
         const comments = await issueService(db).listComments(issue.id, { order: "desc", limit: 30 });
         result = { task: pick(issue, taskFields), comments: rows(comments).map((v) => pick(v, commentFields)) };
+      } else if (name === "list_deliverables") {
+        const taskId = String(args.taskId ?? "").trim();
+        if (!taskId) throw forbidden("taskId is required");
+        const issue = await issueService(db).getById(taskId);
+        if (!issue || issue.companyId !== companyId) throw forbidden("Task is unavailable");
+        const docs = await documentService(db).listIssueDocuments(issue.id);
+        const deliverables = await workProductService(db).listForIssue(issue.id);
+        result = {
+          taskId: issue.id,
+          documents: rows(docs).map((v) => pick(v, documentFields)),
+          deliverables: rows(deliverables).map((v) => pick(v, deliverableFields)),
+        };
+      } else if (name === "read_document") {
+        const taskId = String(args.taskId ?? "").trim();
+        const key = String(args.key ?? "").trim();
+        if (!taskId || !key) throw forbidden("taskId and key are required");
+        const issue = await issueService(db).getById(taskId);
+        if (!issue || issue.companyId !== companyId) throw forbidden("Task is unavailable");
+        const doc = await documentService(db).getIssueDocumentByKey(issue.id, key);
+        if (!doc) throw forbidden("Document not found for that key");
+        result = { document: pick(doc, documentFields) };
       } else if (name === "pending_approvals") {
         const pending = await approvalService(db).list(companyId, "pending");
         result = { approvals: rows(pending).map((v) => pick(v, approvalFields)) };

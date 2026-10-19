@@ -25,7 +25,26 @@ const support = await getEmbeddedPostgresTestSupport();
     const token = createLocalAgentJwt(f.agentId, f.companyId, "paperclip_runner", f.runId, f.responsibleUserId)!;
     const { body } = await rpc(token, "tools/list");
     const names = body.result.tools.map((t: { name: string }) => t.name).sort();
-    expect(names).toEqual(["pending_approvals", "read_task", "search_tasks"]);
+    expect(names).toEqual(["list_deliverables", "pending_approvals", "read_document", "read_task", "search_tasks"]);
+  });
+
+  it("lists and reads a task's saved documents (artifacts) by key", async () => {
+    const f = await server.fixture({});
+    const token = createLocalAgentJwt(f.agentId, f.companyId, "paperclip_runner", f.runId, f.responsibleUserId)!;
+    // The fixture seeds a "notes" document on the issue.
+    const listed = await rpc(token, "tools/call", { name: "list_deliverables", arguments: { taskId: f.issueId } });
+    const docs = listed.body.result.structuredContent.documents;
+    expect(docs.some((d: { key: string }) => d.key === "notes")).toBe(true);
+
+    const read = await rpc(token, "tools/call", { name: "read_document", arguments: { taskId: f.issueId, key: "notes" } });
+    const doc = read.body.result.structuredContent.document;
+    expect(doc.key).toBe("notes");
+    expect(typeof doc.body).toBe("string");
+    expect(doc.body.length).toBeGreaterThan(0);
+
+    // Unknown key errors cleanly, does not leak.
+    const miss = await rpc(token, "tools/call", { name: "read_document", arguments: { taskId: f.issueId, key: "nonexistent" } });
+    expect(miss.body.result.isError).toBe(true);
   });
 
   it("searches tasks assigned to the agent without any issue context", async () => {
