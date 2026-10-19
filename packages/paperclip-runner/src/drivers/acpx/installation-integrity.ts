@@ -530,7 +530,7 @@ interface VerifiedAcpxRuntimeExecutable {
   path: string;
   digest: string;
   identity: VerifiedAcpxCommandIdentity;
-  environmentVariable: "CLAUDE_CODE_EXECUTABLE" | "CODEX_PATH" | "PAPERCLIP_GROK_VERIFIED_EXECUTABLE";
+  environmentVariable: "CLAUDE_CODE_EXECUTABLE" | "CODEX_PATH" | "PAPERCLIP_GROK_VERIFIED_EXECUTABLE" | "PAPERCLIP_KIRO_VERIFIED_EXECUTABLE";
 }
 
 interface AcpxPackageMetadata {
@@ -563,9 +563,12 @@ export async function verifyQualifiedAcpxInstallation(
   profile: QualifiedAcpxProfile,
   resolvePackageJson: AcpxPackageJsonResolver = defaultPackageJsonResolver,
 ): Promise<VerifiedAcpxInstallation> {
-  const builtin = profile.agent === "grok";
-  if (builtin && (profile.agentServerPackage !== "builtin:grok-acp" || profile.agentServerVersion !== "1" || profile.agentRuntimePackage !== "native:grok" || profile.agentRuntimeVersion !== "1.0.13")) {
+  const builtin = profile.agent === "grok" || profile.agent === "kiro";
+  if (profile.agent === "grok" && (profile.agentServerPackage !== "builtin:grok-acp" || profile.agentServerVersion !== "1" || profile.agentRuntimePackage !== "native:grok" || profile.agentRuntimeVersion !== "1.0.13")) {
     throw new Error("Grok builtin profile identity mismatch");
+  }
+  if (profile.agent === "kiro" && (profile.agentServerPackage !== "builtin:kiro-acp" || profile.agentServerVersion !== "1" || profile.agentRuntimePackage !== "native:kiro" || profile.agentRuntimeVersion !== "1")) {
+    throw new Error("Kiro builtin profile identity mismatch");
   }
   const serverPackageJsonPath = builtin ? null : await realpath(resolvePackageJson(profile.agentServerPackage));
   const serverPackage: AcpxPackageMetadata = builtin
@@ -583,7 +586,8 @@ export async function verifyQualifiedAcpxInstallation(
     profile.agent,
   );
   const serverPackageFormat = packageModuleFormat(serverPackage.type);
-  const packageDirectory = builtin ? await realpath(dirname(builtinGrokLauncherPath())) : dirname(serverPackageJsonPath!);
+  const builtinLauncherPath = profile.agent === "kiro" ? builtinKiroLauncherPath() : builtinGrokLauncherPath();
+  const packageDirectory = builtin ? await realpath(dirname(builtinLauncherPath)) : dirname(serverPackageJsonPath!);
   const unresolvedCommandPath = resolve(packageDirectory, relativeCommand);
   if (!isInside(packageDirectory, unresolvedCommandPath)) {
     throw new Error(`ACPX ${profile.agent} executable escapes its package`);
@@ -613,7 +617,9 @@ export async function verifyQualifiedAcpxInstallation(
   let runtimePackage: AcpxPackageMetadata | null = null;
   let runtimeExecutable: VerifiedAcpxRuntimeExecutable | null = null;
   if (builtin) {
-    runtimeExecutable = await verifyProvisionedGrokExecutable();
+    runtimeExecutable = profile.agent === "kiro"
+      ? await verifyProvisionedKiroExecutable()
+      : await verifyProvisionedGrokExecutable();
   } else if (profile.agentRuntimePackage !== null) {
     if (profile.agentRuntimeVersion === null) {
       throw new Error("Qualified ACPX runtime package omitted its version");
@@ -905,6 +911,44 @@ export async function verifyProvisionedGrokExecutable(executablePath = GROK_PRER
   await verified.handle.close();
   return { path: executablePath, digest: `sha256:${digest}`, identity: verified.identity,
     environmentVariable: "PAPERCLIP_GROK_VERIFIED_EXECUTABLE" };
+}
+
+// Same layout in source, compiled modules, bundled sidecar, and vendored npm output.
+export function builtinKiroLauncherPath(moduleUrl: string = import.meta.url): string {
+  // Only the controller supplies this path to the descriptor-loaded sidecar;
+  // createSanitizedAcpxSpawnInput excludes it from provider environments.
+  const root = process.env.PAPERCLIP_ACPX_BUILTIN_ROOT;
+  if (root !== undefined) {
+    if (!isAbsolute(root) || root.includes("\0") || resolve(root) !== root) throw new Error("Invalid builtin provider root");
+    return resolve(root, "kiro/launcher.cjs");
+  }
+  for (const relativePath of ["../../providers/kiro/launcher.cjs", "../providers/kiro/launcher.cjs"]) {
+    const candidate = fileURLToPath(new URL(relativePath, moduleUrl));
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error("Kiro builtin launcher is missing from the Paperclip installation");
+}
+
+export const KIRO_PREREQUISITE_PATH = "/opt/paperclip/providers/kiro/kiro-cli";
+const KIRO_PREREQUISITE_DIGEST_PATH = "/opt/paperclip/providers/kiro/kiro-cli.sha256";
+
+export async function verifyProvisionedKiroExecutable(executablePath = KIRO_PREREQUISITE_PATH): Promise<VerifiedAcpxRuntimeExecutable> {
+  // Unlike grok, the kiro-cli digest is not hardcoded per platform: it is
+  // provisioned alongside the executable at build time so the same source can
+  // ride any qualified kiro-cli build. Accept "sha256:<hex>" or bare "<hex>".
+  let rawDigest: string;
+  try {
+    rawDigest = (await readFile(KIRO_PREREQUISITE_DIGEST_PATH, "utf8")).trim();
+  } catch {
+    throw new Error("Kiro prerequisite digest is not provisioned");
+  }
+  const normalized = rawDigest.startsWith("sha256:") ? rawDigest : `sha256:${rawDigest}`;
+  if (!/^sha256:[a-f0-9]{64}$/.test(normalized)) throw new Error("Kiro prerequisite digest is not provisioned");
+  if (!existsSync(executablePath)) throw new Error(`Kiro prerequisite missing: provision ${KIRO_PREREQUISITE_PATH}`);
+  const verified = await openVerifiedRuntimeExecutable(executablePath, normalized, "kiro");
+  await verified.handle.close();
+  return { path: executablePath, digest: normalized, identity: verified.identity,
+    environmentVariable: "PAPERCLIP_KIRO_VERIFIED_EXECUTABLE" };
 }
 
 async function verifyQualifiedRuntimeExecutable(input: {
@@ -1764,7 +1808,7 @@ function snapshotBootstrap(format: AcpxCommandFormat, guarded = false): string {
     'if ((serverPackageFormat !== "module" && serverPackageFormat !== "commonjs") || !Array.isArray(dependencyAncestorFormats) || dependencyAncestorFormats.length !== dependencyAncestorCount || dependencyAncestorFormats.some((value) => value !== "module" && value !== "commonjs")) throw new Error("ACPX provider package formats are invalid");',
     'if (providerRuntimeExecutableCount !== 0 && providerRuntimeExecutableCount !== 1) throw new Error("ACPX provider runtime executable count is invalid");',
     `const providerRuntimeExecutableFd = ${DEPENDENCY_ANCESTOR_FD_START} + dependencyAncestorCount;`,
-    'if (providerRuntimeExecutableCount === 1) { if (providerRuntimeEnvironmentVariable !== "CODEX_PATH" && providerRuntimeEnvironmentVariable !== "CLAUDE_CODE_EXECUTABLE" && providerRuntimeEnvironmentVariable !== "PAPERCLIP_GROK_VERIFIED_EXECUTABLE") throw new Error("ACPX provider runtime environment target is invalid"); fs.fstatSync(providerRuntimeExecutableFd); process.env[providerRuntimeEnvironmentVariable] = privateSnapshot ? privateSnapshot.executable : "/proc/" + process.pid + "/fd/" + providerRuntimeExecutableFd; } else if (providerRuntimeEnvironmentVariable !== undefined) throw new Error("ACPX provider runtime environment target is unexpected");',
+    'if (providerRuntimeExecutableCount === 1) { if (providerRuntimeEnvironmentVariable !== "CODEX_PATH" && providerRuntimeEnvironmentVariable !== "CLAUDE_CODE_EXECUTABLE" && providerRuntimeEnvironmentVariable !== "PAPERCLIP_GROK_VERIFIED_EXECUTABLE" && providerRuntimeEnvironmentVariable !== "PAPERCLIP_KIRO_VERIFIED_EXECUTABLE") throw new Error("ACPX provider runtime environment target is invalid"); fs.fstatSync(providerRuntimeExecutableFd); process.env[providerRuntimeEnvironmentVariable] = privateSnapshot ? privateSnapshot.executable : "/proc/" + process.pid + "/fd/" + providerRuntimeExecutableFd; } else if (providerRuntimeEnvironmentVariable !== undefined) throw new Error("ACPX provider runtime environment target is unexpected");',
     ...(guarded
       ? [
           `const guardianFd = ${DEPENDENCY_ANCESTOR_FD_START} + dependencyAncestorCount + providerRuntimeExecutableCount;`,

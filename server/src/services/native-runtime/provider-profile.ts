@@ -22,6 +22,7 @@ export const CLAUDE_MANAGED_BETA_VERSION = "managed-agents-2026-04-01" as const;
 
 export const QUALIFIED_ACPX_RUNNER_MODELS = {
   grok: "grok-4.7",
+  kiro: "auto",
   claude: "claude-sonnet-5",
   codex: "gpt-5.6-sol",
 } as const;
@@ -452,7 +453,7 @@ export function resolvePaperclipRunnerProviderProfile(
     }
     throw new PaperclipRunnerProviderProfileError("paperclip_runner_acpx_agent_unavailable", `${pendingAcpxProfile.label} is awaiting local and Daytona qualification. Its profile is not enabled for production runs.`);
   }
-  if (acpxAgent !== "claude" && acpxAgent !== "codex" && acpxAgent !== "grok") {
+  if (acpxAgent !== "claude" && acpxAgent !== "codex" && acpxAgent !== "grok" && acpxAgent !== "kiro") {
     throw new PaperclipRunnerProviderProfileError(
       "paperclip_runner_acpx_agent_unavailable",
       "Paperclip Runner ACPX requires a qualified agent profile.",

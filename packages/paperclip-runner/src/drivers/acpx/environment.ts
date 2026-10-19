@@ -8,6 +8,9 @@ export const ACPX_CREDENTIAL_NAMES: Readonly<Record<QualifiedAcpxAgent, readonly
   copilot: ["COPILOT_GITHUB_TOKEN"],
   claude: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
   codex: ["OPENAI_API_KEY", "CODEX_API_KEY"],
+  // Kiro authenticates via the kiro-cli SSO session (HOME/.kiro), not an env
+  // secret: no credential key is injected into the provider environment.
+  kiro: [],
 };
 const isCandidate = (agent: QualifiedAcpxAgent) => agent === "pi" || agent === "cursor" || agent === "copilot";
 

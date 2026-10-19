@@ -102,6 +102,9 @@ impl AcpxSidecarTransport {
             "pi" => &["OPENROUTER_API_KEY"],
             "cursor" => &["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"],
             "copilot" => &["COPILOT_GITHUB_TOKEN"],
+            // Kiro authenticates via the kiro-cli SSO session (HOME/.kiro), not an
+            // env secret: no credential key is injected into the provider env.
+            "kiro" => &[],
             _ => {
                 return Err(LocalRunnerError::invalid(
                     "ACPX sidecar credentials require a known agent profile",
@@ -135,6 +138,17 @@ impl AcpxSidecarTransport {
             // Credential values alone are not proof of an explicit task binding.
             // The sidecar checks this controller-minted provider/session marker.
             keys.push("PAPERCLIP_ACPX_CREDENTIAL_BINDING");
+        }
+        if agent == "kiro" {
+            // Kiro's authentication is the kiro-cli SSO session persisted under
+            // the agent HOME (~/.local/share/kiro-cli/data.sqlite3), not an env
+            // secret. The agent process must therefore see HOME and the XDG base
+            // dirs used to locate that session. Scoped to kiro only — other
+            // agents keep the stricter env isolation.
+            keys.push("HOME");
+            keys.push("XDG_DATA_HOME");
+            keys.push("XDG_CONFIG_HOME");
+            keys.push("XDG_CACHE_HOME");
         }
         keys.extend_from_slice(credential_keys);
         Self::start_with_environment_keys(config, &keys)

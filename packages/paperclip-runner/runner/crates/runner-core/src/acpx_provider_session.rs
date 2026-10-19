@@ -85,13 +85,15 @@ impl AcpxProviderSessionConfig {
             "codex" => "gpt-5.6-sol",
             "pi" => "openrouter/deepseek/deepseek-v4-flash-0731",
             "cursor" | "copilot" => self.model.as_str(),
+            // Kiro is provider-verified (kiro-cli --model), not an exact-match gate.
+            "kiro" => self.model.as_str(),
             _ => {
                 return Err(LocalRunnerError::invalid(
                     "ACPX agent must name a known immutable profile",
                 ))
             }
         };
-        if self.agent != "claude" && self.agent != "grok" && self.model != qualified_model {
+        if self.agent != "claude" && self.agent != "grok" && self.agent != "kiro" && self.model != qualified_model {
             return Err(LocalRunnerError::invalid(format!(
                 "ACPX {} profile requires exact model {qualified_model}",
                 self.agent
