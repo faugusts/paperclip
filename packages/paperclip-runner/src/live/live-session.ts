@@ -649,7 +649,7 @@ export function assertCapabilityLiveSessionSnapshot(
   }
   if (provider === "acpx") {
     const agent = config.acpxAgent;
-    if (agent !== "pi" && agent !== "claude" && agent !== "codex" && agent !== "grok" && agent !== "cursor" && agent !== "copilot") {
+    if (agent !== "pi" && agent !== "claude" && agent !== "codex" && agent !== "grok" && agent !== "cursor" && agent !== "copilot" && agent !== "kiro") {
       throw new Error("capability_live_checkpoint_corrupt: invalid config.acpxAgent");
     }
     const expected = resolveQualifiedAcpxProfile(agent, text(config.requestedModel));
