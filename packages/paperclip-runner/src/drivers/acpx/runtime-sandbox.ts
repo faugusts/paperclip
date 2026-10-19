@@ -26,6 +26,7 @@ import {
   relative,
   resolve,
 } from "node:path";
+import { homedir } from "node:os";
 
 import { createSanitizedAcpxSpawnInput } from "./environment.js";
 import { claudePaperclipPermissionRules } from "./permission-policy.js";
@@ -469,10 +470,18 @@ export async function prepareAcpxRuntimeSandbox(input: {
   // back by kiro-cli — stays coherent. HOME/config/cache remain sandbox-private.
   let kiroCanonicalDataHome: string | null = null;
   if (input.agent === "kiro") {
-    const ambientHome = input.environment?.HOME;
+    // Prefer an explicitly forwarded absolute HOME, but the ambient HOME env is
+    // not always propagated to the sidecar. The runner always executes as the
+    // node user whose OS home is the kiro-cli session root, so fall back to the
+    // passwd database (os.homedir) rather than failing closed on a missing env.
+    const forwardedHome = input.environment?.HOME;
+    const ambientHome =
+      typeof forwardedHome === "string" && isAbsolute(forwardedHome)
+        ? forwardedHome
+        : homedir();
     if (typeof ambientHome !== "string" || !isAbsolute(ambientHome)) {
       throw new Error(
-        "Kiro ACPX launch requires an absolute HOME to locate the kiro-cli SSO session",
+        "Kiro ACPX launch requires an absolute home directory to locate the kiro-cli SSO session",
       );
     }
     const candidate = join(ambientHome, ".local", "share");
