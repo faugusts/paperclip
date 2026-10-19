@@ -39,6 +39,7 @@ const WRITE_DOCUMENT_TOOL = {
 // exposed JSON Schema here and translate them to executionPolicy/watchdog in
 // callProjectTool below.
 const CREATE_TASK_GOVERNANCE_PROPERTIES = {
+  assigneeAgentId: { type: "string", description: "UUID of the agent this task is delegated to (alias of assigneeActorId). REQUIRED when delegating to another agent: if omitted, the task is assigned to the CURRENT agent, which silently misassigns delegated work back to the delegator. Always set this to the executor's agent id." },
   reviewerAgentId: { type: "string", description: "Agent UUID that must review (approve/request changes) before this task reaches done. Runtime-enforced review stage. Do not set the assignee as its own reviewer." },
   approverUserId: { type: "string", description: "Board user UUID that must give final sign-off after review. Use for sensitive/irreversible work (auth, RLS, minor data, structural irreversibilities)." },
   watchdogAgentId: { type: "string", description: "Agent UUID that watches this task's subtree and is woken to act if it stalls. Do not set the assignee as its own watchdog." },
@@ -48,7 +49,12 @@ const CREATE_TASK_GOVERNANCE_PROPERTIES = {
 function withCreateTaskGovernance(inputSchema: unknown): unknown {
   const schema = (inputSchema && typeof inputSchema === "object") ? inputSchema as Record<string, unknown> : { type: "object" };
   const props = (schema.properties && typeof schema.properties === "object") ? schema.properties as Record<string, unknown> : {};
-  return { ...schema, properties: { ...props, ...CREATE_TASK_GOVERNANCE_PROPERTIES } };
+  // Also clarify the canonical assigneeActorId description so a delegator does
+  // not read "omit to assign the current agent" as the default for delegation.
+  const assigneeActorId = (props.assigneeActorId && typeof props.assigneeActorId === "object")
+    ? { ...(props.assigneeActorId as Record<string, unknown>), description: "UUID of the agent this task is delegated to. REQUIRED when delegating: if omitted, the task is assigned to the current agent (the delegator). Set this to the executor's agent id." }
+    : props.assigneeActorId;
+  return { ...schema, properties: { ...props, ...(assigneeActorId ? { assigneeActorId } : {}), ...CREATE_TASK_GOVERNANCE_PROPERTIES } };
 }
 
 export function projectToolDefinitions(workMode: string, includeTask = false) {
@@ -145,7 +151,11 @@ export async function callProjectTool(input: {
     body = createIssueSchema.parse({
       title: args.title, description: args.description, priority: args.priority,
       projectId: args.projectId, initialPlan: args.initialPlan,
-      assigneeAgentId: args.assigneeActorId ?? input.agentId,
+      // Accept both the catalog's canonical `assigneeActorId` and the common
+      // `assigneeAgentId` alias (what delegating agents are told to send). A
+      // mismatched name must never silently fall through to the current agent,
+      // which would misassign a delegated task back to the delegator.
+      assigneeAgentId: args.assigneeActorId ?? args.assigneeAgentId ?? input.agentId,
       parentId: input.conversation ? null : input.issueId,
       status: Array.isArray(args.blockedByTaskIds) && args.blockedByTaskIds.length ? "blocked" : "todo",
       blockedByIssueIds: args.blockedByTaskIds,

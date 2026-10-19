@@ -143,6 +143,32 @@ const support = await getEmbeddedPostgresTestSupport();
     await expect(callProjectTool({ ...base, name: "write_document", arguments: { key: "Not A Slug!", body: "x" } })).rejects.toThrow();
   });
 
+  it("delegates to another agent via assigneeAgentId instead of self-assigning the caller", async () => {
+    const f = await server.fixture({ conversation: true });
+    // A second agent in the same company to delegate to (the "João" case).
+    const otherAgentId = randomUUID();
+    await server.db.insert(agents).values({ id: otherAgentId, companyId: f.companyId, name: "Delegatee", adapterType: "paperclip_runner", adapterConfig: { provider: "codex" }, runtimeConfig: { heartbeat: { enabled: false } }, status: "active" });
+    const base = { apiUrl: server.apiUrl, token: createLocalAgentJwt(f.agentId, f.companyId, "paperclip_runner", f.runId, f.responsibleUserId)!, companyId: f.companyId, issueId: f.issueId, agentId: f.agentId, conversation: true };
+
+    // The schema exposes assigneeAgentId as a delegation alias.
+    const ct = projectToolDefinitions("standard", true).find(d => d.name === "create_task") as { inputSchema: { properties: Record<string, unknown> } };
+    expect(ct.inputSchema.properties.assigneeAgentId).toBeTruthy();
+
+    // assigneeAgentId (the name the Tech Lead prompt tells agents to use) must
+    // assign to the other agent, not fall through to the caller.
+    // callProjectTool returns the created issue object directly.
+    const viaAlias = await callProjectTool({ ...base, name: "create_task", arguments: { title: "Delegated via alias", assigneeAgentId: otherAgentId, idempotencyKey: "deleg-alias" } }) as { assigneeAgentId: string };
+    expect(viaAlias.assigneeAgentId).toBe(otherAgentId);
+
+    // The canonical assigneeActorId keeps working too.
+    const viaCanonical = await callProjectTool({ ...base, name: "create_task", arguments: { title: "Delegated via canonical", assigneeActorId: otherAgentId, idempotencyKey: "deleg-canon" } }) as { assigneeAgentId: string };
+    expect(viaCanonical.assigneeAgentId).toBe(otherAgentId);
+
+    // Omitting both still self-assigns the caller (documented default).
+    const selfAssigned = await callProjectTool({ ...base, name: "create_task", arguments: { title: "No assignee", idempotencyKey: "deleg-self" } }) as { assigneeAgentId: string };
+    expect(selfAssigned.assigneeAgentId).toBe(f.agentId);
+  });
+
   it("allows low-trust chat handoffs and self-assigned subtasks through both creation endpoints", async () => {
     const f = await server.fixture({ conversation: true, disableWakeOnDemand: true });
     const policy = { trustPreset: "low_trust_review", authorizationPolicy: { trustBoundary: { mode: "low_trust_review", companyId: f.companyId, projectIds: [f.projectId] } } };
