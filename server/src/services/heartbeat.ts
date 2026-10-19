@@ -20658,7 +20658,12 @@ export function heartbeatService(
       }
       const taskKey = deriveTaskKeyWithHeartbeatFallback(context, null);
       const sessionCodec = getAdapterSessionCodec(agent.adapterType);
-      const issueId = readNonEmptyString(context.issueId);
+      // Native runs persist their bound issue on the run row (nativeIssueId). A
+      // recovery/timer cycle can re-enter dispatch with a context that lost
+      // issueId; fall back to the run's nativeIssueId (same idiom as the orphan
+      // sweep at getIssueExecutionContext callers) so a native run never loses
+      // its issue — otherwise the native mode gate rejects it as workMode-less.
+      const issueId = readNonEmptyString(context.issueId) ?? readNonEmptyString(run.nativeIssueId);
       let issueContext = issueId
         ? await getIssueExecutionContext(agent.companyId, issueId)
         : null;
