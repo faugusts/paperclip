@@ -545,6 +545,25 @@ export async function prepareAcpxRuntimeSandbox(input: {
     input.environment,
     input.agent,
   );
+  // TEMP DIAGNOSTIC (INT GitHub broker investigation): report whether the
+  // broker env reached the sandbox boundary at all (input.environment) and
+  // whether it survived the sanitizer before the launcher reapplication below.
+  try {
+    const envKeys = Object.keys(input.environment ?? {});
+    const brokerPresentIn = (e: NodeJS.ProcessEnv | undefined) =>
+      Boolean(e?.PAPERCLIP_GITHUB_BROKER_TOKEN);
+    process.stderr.write(
+      `[diag:acpx-sandbox] agent=${input.agent} inputEnvKeyCount=${envKeys.length} inputHasBrokerToken=${String(
+        brokerPresentIn(input.environment),
+      )} inputHasLauncherDir=${String(
+        Boolean(input.environment?.PAPERCLIP_GITHUB_LAUNCHER_DIR),
+      )} sanitizedHasBrokerToken=${String(
+        Boolean(sanitizedSpawnInput.env.PAPERCLIP_GITHUB_BROKER_TOKEN),
+      )}\n`,
+    );
+  } catch {
+    // diagnostic must never break sandbox preparation
+  }
   // The sanitizer deliberately returns an opaque, frozen launch boundary.
   // Build the sandbox-owned mutable copy only from that projected environment
   // before adding paths that were created and validated above.
