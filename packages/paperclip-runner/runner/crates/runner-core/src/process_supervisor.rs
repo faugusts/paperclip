@@ -780,44 +780,6 @@ impl SupervisedProcess {
                 command.env(key, value);
             }
         }
-        // TEMP DIAGNOSTIC (INT GitHub broker investigation): report which
-        // GitHub-broker-related allowlisted keys actually had a value in the
-        // runnerd process environment at spawn time, and whether the key was in
-        // the allowlist at all. This pinpoints whether the per-run broker env
-        // reached runnerd (var present) or not (var absent), independent of the
-        // allowlist. Only logs key *presence*, never values.
-        {
-            let probe = [
-                "PAPERCLIP_GITHUB_BROKER_TOKEN",
-                "PAPERCLIP_GITHUB_BROKER_URL",
-                "PAPERCLIP_GITHUB_LAUNCHER_DIR",
-                "GH_CONFIG_DIR",
-                "GIT_CONFIG_COUNT",
-            ];
-            let allow: std::collections::HashSet<&str> = [
-                "PATH", "PATHEXT", "SystemRoot", "WINDIR", "HOME", "USERPROFILE",
-                "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP", "TZ",
-            ]
-            .into_iter()
-            .chain(additional_environment_keys.iter().copied())
-            .collect();
-            let report: Vec<String> = probe
-                .iter()
-                .map(|k| {
-                    format!(
-                        "{k}:inEnv={},inAllow={}",
-                        std::env::var_os(k).is_some(),
-                        allow.contains(k)
-                    )
-                })
-                .collect();
-            eprintln!(
-                "[diag:runnerd-spawn] program={} allowlistExtraCount={} {}",
-                program.display(),
-                additional_environment_keys.len(),
-                report.join(" ")
-            );
-        }
         if let Some(executable) = verified_runtime_executable {
             // Node reports a sealed memfd launch as `/memfd:... (deleted)` via
             // process.execPath. Give descriptor-loaded runtimes the inherited,
