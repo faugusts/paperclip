@@ -30,6 +30,7 @@ import {
 import { homedir } from "node:os";
 
 import { createSanitizedAcpxSpawnInput } from "./environment.js";
+import { githubCredentialEnvironment } from "../../github-credential-environment.js";
 import { claudePaperclipPermissionRules } from "./permission-policy.js";
 import type { QualifiedAcpxAgent } from "./qualified-profiles.js";
 import {
@@ -609,6 +610,40 @@ export async function prepareAcpxRuntimeSandbox(input: {
         }
       : {}),
   });
+  // The ACPX credential allowlist (createSanitizedAcpxSpawnInput) deliberately
+  // strips everything it does not recognize, including the per-run GitHub
+  // broker environment the controller injected into input.environment
+  // (PAPERCLIP_GITHUB_BROKER_URL/TOKEN, GH_CONFIG_DIR, the bounded GIT_CONFIG_*
+  // identity, and ZDOTDIR/BASH_ENV profile hooks). Without it the sandboxed
+  // git/gh wrapper cannot reach the 127.0.0.1 credential broker and reports
+  // capability_missing, so `git push`/`gh pr create` fail with "could not read
+  // Username ... terminal prompts disabled". The Codex driver readmits exactly
+  // this set at its launch boundary (drivers/codex/app-server-transport.ts); do
+  // the same here so every ACPX agent (kiro included) can authenticate Git
+  // operations. githubCredentialEnvironment only re-emits the canonical,
+  // bounded broker keys from input.environment, so it never widens the
+  // allowlist to arbitrary host variables.
+  if (input.environment?.PAPERCLIP_GITHUB_BROKER_TOKEN) {
+    Object.assign(
+      launchEnvironment,
+      githubCredentialEnvironment(input.environment),
+    );
+    // githubCredentialEnvironment carries the launcher directory
+    // (PAPERCLIP_GITHUB_LAUNCHER_DIR) and the ZDOTDIR/BASH_ENV profiles that
+    // re-export it, but intentionally not PATH itself. A non-login git/gh
+    // invocation would otherwise never source those profiles and would resolve
+    // the real binaries instead of the broker wrappers. Prepend the launcher
+    // directory to the sanitized PATH so the wrappers win regardless of shell
+    // startup, mirroring the managedPath prepend in prepareGitHubOperationLaunchers.
+    const launcherDir = input.environment.PAPERCLIP_GITHUB_LAUNCHER_DIR;
+    if (typeof launcherDir === "string" && launcherDir.length > 0) {
+      const basePath = launchEnvironment.PATH;
+      launchEnvironment.PATH =
+        typeof basePath === "string" && basePath.length > 0
+          ? `${launcherDir}:${basePath}`
+          : launcherDir;
+    }
+  }
   validateEnvironmentSize(launchEnvironment);
   const persistedEnvironment = Object.fromEntries(
     Object.entries(launchEnvironment).filter(
