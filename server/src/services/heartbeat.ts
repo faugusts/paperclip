@@ -21763,25 +21763,6 @@ export function heartbeatService(
         ["local", "ssh"].includes(
           selectedEnvironmentForConfig?.driver ?? "local",
         );
-      // TEMP DIAGNOSTIC (INT GitHub broker investigation): surface exactly why
-      // managed GitHub credentials do or do not activate for a native run.
-      logger.info(
-        {
-          runId: run.id,
-          agentId: agent.id,
-          companyId: agent.companyId,
-          hasResponsibleUserId: Boolean(responsibleUserId),
-          githubConfigured: githubSelection.configured,
-          githubIdentitySource: githubSelection.identitySource ?? null,
-          githubSelectionError: githubSelection.error ?? null,
-          githubGrantId: githubSelection.grant?.id ?? null,
-          useHostGitHub,
-          environmentDriver: selectedEnvironmentForConfig?.driver ?? "local",
-          trustPresetKind: trustPreset.kind,
-          managedGitHubResolved: !useHostGitHub && githubSelection.configured,
-        },
-        "[diag:github-gate] managed GitHub selection resolved",
-      );
 
       const { resolvedConfig, secretKeys, secretManifest } =
         await resolveExecutionRunAdapterConfig({

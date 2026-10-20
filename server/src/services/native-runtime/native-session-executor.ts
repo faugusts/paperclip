@@ -8300,30 +8300,6 @@ async function executePaperclipNativeSessionWithinScope(
       });
       releaseGitHubRun = githubAccess.activate(input.execution.binding);
       input = { ...input, runnerEnvironment: { ...input.runnerEnvironment, ...githubAccess.env } };
-      // TEMP DIAGNOSTIC (INT GitHub broker investigation): report which broker
-      // keys the server-side GitHub access actually produced and merged.
-      {
-        const brokerKeys = Object.keys(githubAccess.env ?? {}).filter((k) =>
-          k.startsWith("PAPERCLIP_GITHUB") ||
-          k.startsWith("GIT_") ||
-          k === "GH_TOKEN" ||
-          k === "GITHUB_TOKEN" ||
-          k === "GH_CONFIG_DIR" ||
-          k === "PAPERCLIP_GIT_TOKEN",
-        );
-        await input.onLog?.(
-          "stdout",
-          `[diag:github-broker] managedGitHub=true ready=${String(
-            githubAccess.ready,
-          )} envKeyCount=${Object.keys(githubAccess.env ?? {}).length} brokerKeys=${JSON.stringify(
-            brokerKeys,
-          )} hasBrokerToken=${String(
-            Boolean(input.runnerEnvironment?.PAPERCLIP_GITHUB_BROKER_TOKEN),
-          )} hasLauncherDir=${String(
-            Boolean(input.runnerEnvironment?.PAPERCLIP_GITHUB_LAUNCHER_DIR),
-          )}\n`,
-        );
-      }
     }
     const expectedCurrentWakeComments = await resolveCurrentWakeCommentsBinding(
       input.db,
