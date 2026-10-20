@@ -63,6 +63,7 @@ import {
   type QualifiedAcpxAgent,
 } from "../drivers/acpx/qualified-profiles.js";
 import { ACPX_CREDENTIAL_BINDING_ENV, createAcpxCredentialBinding, createSanitizedAcpxSpawnInput } from "../drivers/acpx/environment.js";
+import { githubCredentialEnvironment } from "../github-credential-environment.js";
 import {
   createSanitizedAwsAgentCoreEnvironment,
   createSanitizedClaudeManagedEnvironment,
@@ -3157,6 +3158,20 @@ export function createCapabilityRunnerdProviderEnvironment(input: {
         input.options.environment,
         input.options.acpxAgent ?? "codex",
       ).env,
+      // Project the per-run managed GitHub credential environment into the
+      // runnerd provider environment, exactly as the codex branch does via
+      // createSanitizedCodexEnvironment (which calls githubCredentialEnvironment).
+      // createSanitizedAcpxSpawnInput deliberately keeps a narrow static
+      // allowlist and drops the broker vars, so without this the per-run broker
+      // (PAPERCLIP_GITHUB_BROKER_URL/TOKEN, launcher dir, GIT_CONFIG_*, network
+      // access flags) never reaches runnerd's std::env. The runnerd->sidecar
+      // allowlist (acpx_sidecar_transport.rs start_for_agent, kiro arm) and the
+      // sidecar->agent readmission (acpx/runtime-sandbox.ts) are already in
+      // place; this is the missing first hop. Gated on the broker token so
+      // non-GitHub runs keep the stricter env with no broker keys present.
+      ...(input.options.environment?.PAPERCLIP_GITHUB_BROKER_TOKEN
+        ? githubCredentialEnvironment(input.options.environment)
+        : {}),
       ...(credentialBinding === undefined ? {} : { [ACPX_CREDENTIAL_BINDING_ENV]: credentialBinding }),
       ...(input.options.acpxAgent === "grok" && input.options.environment?.PAPERCLIP_ACPX_GROK_AUTH_JSON_SECRET
         ? { PAPERCLIP_ACPX_GROK_AUTH_JSON_SECRET: input.options.environment.PAPERCLIP_ACPX_GROK_AUTH_JSON_SECRET } : {}),
