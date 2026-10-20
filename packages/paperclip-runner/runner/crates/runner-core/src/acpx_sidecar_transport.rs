@@ -102,12 +102,19 @@ impl AcpxSidecarTransport {
             "pi" => &["OPENROUTER_API_KEY"],
             "cursor" => &["CURSOR_API_KEY", "CURSOR_AUTH_TOKEN"],
             "copilot" => &["COPILOT_GITHUB_TOKEN"],
+            // Kiro authenticates via the kiro-cli SSO session (HOME/.kiro), not an
+            // env secret: no credential key is injected into the provider env.
+            "kiro" => &[],
             _ => {
                 return Err(LocalRunnerError::invalid(
                     "ACPX sidecar credentials require a known agent profile",
                 ))
             }
         };
+        // Owned storage for per-run dynamic git config key names (populated for
+        // the kiro agent below). Declared before `keys` so the borrowed &str
+        // slices live until start_with_environment_keys consumes them.
+        let mut dynamic_git_config_keys: Vec<String> = Vec::new();
         let mut keys = vec![
             "LANGUAGE",
             "SSL_CERT_FILE",
@@ -135,6 +142,71 @@ impl AcpxSidecarTransport {
             // Credential values alone are not proof of an explicit task binding.
             // The sidecar checks this controller-minted provider/session marker.
             keys.push("PAPERCLIP_ACPX_CREDENTIAL_BINDING");
+        }
+        if agent == "kiro" {
+            // Kiro's authentication is the kiro-cli SSO session persisted under
+            // the agent HOME (~/.local/share/kiro-cli/data.sqlite3), not an env
+            // secret. The agent process must therefore see HOME and the XDG base
+            // dirs used to locate that session. Scoped to kiro only — other
+            // agents keep the stricter env isolation.
+            keys.push("HOME");
+            keys.push("XDG_DATA_HOME");
+            keys.push("XDG_CONFIG_HOME");
+            keys.push("XDG_CACHE_HOME");
+            // Managed Git operations: the controller stages a per-run GitHub
+            // credential broker plus git/gh launcher wrappers and injects their
+            // environment into the runner. Without these keys crossing into the
+            // kiro sidecar, the wrappers cannot reach the 127.0.0.1 broker and
+            // report capability_missing, so `git push` / `gh pr create` fail
+            // with "could not read Username ... terminal prompts disabled" and
+            // the agent cannot persist its work to GitHub. These are controller
+            // -minted, per-run, non-secret transport values (the actual token is
+            // served over the local broker, never placed on argv/disk). PATH is
+            // already forwarded; the launcher dir is prepended to it upstream.
+            keys.push("PAPERCLIP_GITHUB_BROKER_URL");
+            keys.push("PAPERCLIP_GITHUB_BROKER_TOKEN");
+            keys.push("PAPERCLIP_GITHUB_BRIDGE_TOKEN");
+            keys.push("PAPERCLIP_GITHUB_LAUNCHER_DIR");
+            keys.push("PAPERCLIP_GITHUB_AUTH_MODE");
+            keys.push("PAPERCLIP_GITHUB_HOST_HOME");
+            keys.push("PAPERCLIP_GIT_METADATA_ROOTS");
+            keys.push("PAPERCLIP_RUNNER_NETWORK_ACCESS");
+            keys.push("PAPERCLIP_RUNNER_NETWORK_ROOTS");
+            keys.push("GH_CONFIG_DIR");
+            keys.push("GH_TOKEN");
+            keys.push("GITHUB_TOKEN");
+            keys.push("GH_ENTERPRISE_TOKEN");
+            keys.push("GITHUB_ENTERPRISE_TOKEN");
+            keys.push("PAPERCLIP_GIT_TOKEN");
+            keys.push("GIT_CONFIG_GLOBAL");
+            keys.push("GIT_CONFIG_SYSTEM");
+            keys.push("GIT_CONFIG_NOSYSTEM");
+            keys.push("GIT_CONFIG_COUNT");
+            keys.push("GIT_TERMINAL_PROMPT");
+            keys.push("GIT_ASKPASS");
+            keys.push("SSH_ASKPASS");
+            keys.push("SSH_AUTH_SOCK");
+            keys.push("GIT_SSH_COMMAND");
+            keys.push("GIT_SSH");
+            keys.push("GIT_AUTHOR_NAME");
+            keys.push("GIT_AUTHOR_EMAIL");
+            keys.push("GIT_COMMITTER_NAME");
+            keys.push("GIT_COMMITTER_EMAIL");
+            keys.push("ZDOTDIR");
+            keys.push("BASH_ENV");
+            // Bounded dynamic git config entries (GIT_CONFIG_KEY_N /
+            // GIT_CONFIG_VALUE_N). The controller sets GIT_CONFIG_COUNT; forward
+            // a conservative upper bound of indices so the credential helper
+            // config survives. Extra unset names are harmless (absent keys are
+            // simply not copied). Owned here and borrowed into `keys` below so
+            // no per-run allocation is leaked.
+            for index in 0..32u32 {
+                dynamic_git_config_keys.push(format!("GIT_CONFIG_KEY_{index}"));
+                dynamic_git_config_keys.push(format!("GIT_CONFIG_VALUE_{index}"));
+            }
+        }
+        for dynamic_key in &dynamic_git_config_keys {
+            keys.push(dynamic_key.as_str());
         }
         keys.extend_from_slice(credential_keys);
         Self::start_with_environment_keys(config, &keys)

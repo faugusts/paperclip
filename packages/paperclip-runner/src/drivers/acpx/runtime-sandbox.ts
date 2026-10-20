@@ -15,6 +15,7 @@ import {
   realpath,
   rename,
   stat,
+  symlink,
   unlink,
   type FileHandle,
 } from "node:fs/promises";
@@ -26,8 +27,10 @@ import {
   relative,
   resolve,
 } from "node:path";
+import { homedir } from "node:os";
 
 import { createSanitizedAcpxSpawnInput } from "./environment.js";
+import { githubCredentialEnvironment } from "../../github-credential-environment.js";
 import { claudePaperclipPermissionRules } from "./permission-policy.js";
 import type { QualifiedAcpxAgent } from "./qualified-profiles.js";
 import {
@@ -458,6 +461,86 @@ export async function prepareAcpxRuntimeSandbox(input: {
     );
   }
 
+  // Kiro authenticates through the machine-wide kiro-cli SSO session persisted
+  // at $XDG_DATA_HOME/kiro-cli/data.sqlite3. Unlike grok/codex (per-run managed
+  // credentials), there is a single container SSO identity shared by every kiro
+  // agent, and kiro-cli coordinates concurrent access with its own
+  // kiro-cli/.refresh.lock. A fresh sandbox data dir would present an empty,
+  // unauthenticated store, so kiro-cli exits ("not logged in") before it can
+  // answer ACP initialize. Point kiro's XDG_DATA_HOME at the canonical data
+  // home so the live session — including short-lived token refreshes written
+  // back by kiro-cli — stays coherent. HOME/config/cache remain sandbox-private.
+  let kiroCanonicalDataHome: string | null = null;
+  let kiroCanonicalSemanticSearch: string | null = null;
+  if (input.agent === "kiro") {
+    // Prefer an explicitly forwarded absolute HOME, but the ambient HOME env is
+    // not always propagated to the sidecar. The runner always executes as the
+    // node user whose OS home is the kiro-cli session root, so fall back to the
+    // passwd database (os.homedir) rather than failing closed on a missing env.
+    const forwardedHome = input.environment?.HOME;
+    const ambientHome =
+      typeof forwardedHome === "string" && isAbsolute(forwardedHome)
+        ? forwardedHome
+        : homedir();
+    if (typeof ambientHome !== "string" || !isAbsolute(ambientHome)) {
+      throw new Error(
+        "Kiro ACPX launch requires an absolute home directory to locate the kiro-cli SSO session",
+      );
+    }
+    const candidate = join(ambientHome, ".local", "share");
+    let physical: string;
+    try {
+      physical = await realpath(candidate);
+    } catch {
+      throw new Error(
+        `Kiro SSO data home is unavailable: provision a kiro-cli login under ${candidate}`,
+      );
+    }
+    const sessionStore = join(physical, "kiro-cli", "data.sqlite3");
+    try {
+      const entry = await stat(sessionStore);
+      if (!entry.isFile() || entry.size === 0) {
+        throw new Error("empty");
+      }
+    } catch {
+      throw new Error(
+        `Kiro kiro-cli SSO session is missing or empty at ${sessionStore}; run \`kiro-cli login\` in the container`,
+      );
+    }
+    kiroCanonicalDataHome = physical;
+    // kiro-cli downloads its ~88 MiB embedding model to $HOME/.semantic_search
+    // on first use. HOME is a fresh per-run sandbox, so without sharing it the
+    // model is re-downloaded (and stored) every run, filling the volume. Reuse
+    // the canonical copy under the OS home when it already exists.
+    const canonicalSemantic = join(ambientHome, ".semantic_search");
+    try {
+      const entry = await stat(canonicalSemantic);
+      if (entry.isDirectory()) {
+        kiroCanonicalSemanticSearch = await realpath(canonicalSemantic);
+      }
+    } catch {
+      // No canonical model yet: let kiro-cli populate the per-run HOME this
+      // time; a later run seeds it once the canonical path exists.
+      kiroCanonicalSemanticSearch = null;
+    }
+    // Share the canonical embedding model with the per-run sandbox HOME via a
+    // symlink so kiro-cli reuses it instead of re-downloading ~88 MiB per run.
+    if (kiroCanonicalSemanticSearch !== null) {
+      try {
+        await symlink(
+          kiroCanonicalSemanticSearch,
+          join(homeDirectory, ".semantic_search"),
+        );
+      } catch (error) {
+        // A pre-existing entry (or race) must not fail sandbox preparation; the
+        // worst case is this run re-downloads the model into its private HOME.
+        if (errorCode(error) !== "EEXIST") {
+          // Non-fatal: continue without the shared model.
+        }
+      }
+    }
+  }
+
   const sanitizedSpawnInput = createSanitizedAcpxSpawnInput(
     input.environment,
     input.agent,
@@ -475,6 +558,11 @@ export async function prepareAcpxRuntimeSandbox(input: {
     XDG_CACHE_HOME: cacheDirectory,
     PAPERCLIP_ACPX_PROFILE: input.agent,
     PAPERCLIP_ACPX_ISOLATED_CONTEXT: "1",
+    // Kiro reads/writes its shared SSO session from the canonical data home;
+    // every other sandbox data need keeps the private per-run dataDirectory.
+    ...(kiroCanonicalDataHome !== null
+      ? { XDG_DATA_HOME: kiroCanonicalDataHome }
+      : {}),
     ...(input.agent === "grok" ? { GROK_HOME: agentHomeDirectory, NO_BROWSER: "1", GROK_DISABLE_AUTOUPDATER: "1" } : {}),
     ...(input.agent === "pi"
       ? {
@@ -522,6 +610,40 @@ export async function prepareAcpxRuntimeSandbox(input: {
         }
       : {}),
   });
+  // The ACPX credential allowlist (createSanitizedAcpxSpawnInput) deliberately
+  // strips everything it does not recognize, including the per-run GitHub
+  // broker environment the controller injected into input.environment
+  // (PAPERCLIP_GITHUB_BROKER_URL/TOKEN, GH_CONFIG_DIR, the bounded GIT_CONFIG_*
+  // identity, and ZDOTDIR/BASH_ENV profile hooks). Without it the sandboxed
+  // git/gh wrapper cannot reach the 127.0.0.1 credential broker and reports
+  // capability_missing, so `git push`/`gh pr create` fail with "could not read
+  // Username ... terminal prompts disabled". The Codex driver readmits exactly
+  // this set at its launch boundary (drivers/codex/app-server-transport.ts); do
+  // the same here so every ACPX agent (kiro included) can authenticate Git
+  // operations. githubCredentialEnvironment only re-emits the canonical,
+  // bounded broker keys from input.environment, so it never widens the
+  // allowlist to arbitrary host variables.
+  if (input.environment?.PAPERCLIP_GITHUB_BROKER_TOKEN) {
+    Object.assign(
+      launchEnvironment,
+      githubCredentialEnvironment(input.environment),
+    );
+    // githubCredentialEnvironment carries the launcher directory
+    // (PAPERCLIP_GITHUB_LAUNCHER_DIR) and the ZDOTDIR/BASH_ENV profiles that
+    // re-export it, but intentionally not PATH itself. A non-login git/gh
+    // invocation would otherwise never source those profiles and would resolve
+    // the real binaries instead of the broker wrappers. Prepend the launcher
+    // directory to the sanitized PATH so the wrappers win regardless of shell
+    // startup, mirroring the managedPath prepend in prepareGitHubOperationLaunchers.
+    const launcherDir = input.environment.PAPERCLIP_GITHUB_LAUNCHER_DIR;
+    if (typeof launcherDir === "string" && launcherDir.length > 0) {
+      const basePath = launchEnvironment.PATH;
+      launchEnvironment.PATH =
+        typeof basePath === "string" && basePath.length > 0
+          ? `${launcherDir}:${basePath}`
+          : launcherDir;
+    }
+  }
   validateEnvironmentSize(launchEnvironment);
   const persistedEnvironment = Object.fromEntries(
     Object.entries(launchEnvironment).filter(

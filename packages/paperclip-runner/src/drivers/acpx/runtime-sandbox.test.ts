@@ -5,6 +5,7 @@ import {
   mkdtemp,
   open,
   readFile,
+  realpath,
   rename,
   rm,
   stat,
@@ -50,6 +51,68 @@ describe("ACPX runtime sandbox", () => {
     expect(config).toContain('[compat.claude]\nhooks = false\nmcps = false');
     expect(await readFile(requirementsPath, "utf8")).toContain('disable_bypass_permissions_mode = true');
     expect((await stat(requirementsPath)).mode & 0o777).toBe(0o600);
+  });
+
+  it("points Kiro XDG_DATA_HOME at the canonical kiro-cli SSO session", async () => {
+    const fixture = await sandboxFixture("kiro");
+    const ambientHome = await mkdtemp(join(tmpdir(), "paperclip-kiro-home-"));
+    temporaryDirectories.push(ambientHome);
+    const dataHome = join(ambientHome, ".local", "share");
+    await mkdir(join(dataHome, "kiro-cli"), { recursive: true });
+    await writeFile(join(dataHome, "kiro-cli", "data.sqlite3"), "SQLite format 3\u0000");
+    const sandbox = await prepareAcpxRuntimeSandbox({
+      binding: fixture.binding,
+      agent: "kiro",
+      environment: { HOME: ambientHome },
+    });
+    // XDG_DATA_HOME must resolve to the canonical data home so kiro-cli finds
+    // the live SSO session; HOME/config/cache stay sandbox-private.
+    expect(sandbox.launchEnvironment.XDG_DATA_HOME).toBe(await realpath(dataHome));
+    expect(sandbox.launchEnvironment.HOME).toBe(sandbox.homeDirectory);
+    expect(sandbox.launchEnvironment.XDG_CONFIG_HOME).toBe(sandbox.configDirectory);
+    expect(sandbox.launchEnvironment.XDG_CACHE_HOME).toBe(sandbox.cacheDirectory);
+    expect(sandbox.launchEnvironment.XDG_DATA_HOME).not.toBe(sandbox.dataDirectory);
+  });
+
+  it("shares the canonical kiro-cli embedding model into the sandbox HOME via symlink", async () => {
+    const fixture = await sandboxFixture("kiro");
+    const ambientHome = await mkdtemp(join(tmpdir(), "paperclip-kiro-home-"));
+    temporaryDirectories.push(ambientHome);
+    // Minimal valid SSO session so preparation does not reject.
+    await mkdir(join(ambientHome, ".local", "share", "kiro-cli"), { recursive: true });
+    await writeFile(join(ambientHome, ".local", "share", "kiro-cli", "data.sqlite3"), "SQLite format 3\u0000");
+    // Canonical embedding model already present under the OS home.
+    const canonicalSemantic = join(ambientHome, ".semantic_search");
+    await mkdir(join(canonicalSemantic, "models", "all-MiniLM-L6-v2"), { recursive: true });
+    await writeFile(join(canonicalSemantic, "models", "all-MiniLM-L6-v2", "model.bin"), "weights");
+    const sandbox = await prepareAcpxRuntimeSandbox({
+      binding: fixture.binding,
+      agent: "kiro",
+      environment: { HOME: ambientHome },
+    });
+    // The sandbox HOME must link .semantic_search at the canonical model so
+    // kiro-cli reuses it instead of re-downloading ~88 MiB per run.
+    const link = join(sandbox.homeDirectory, ".semantic_search");
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await realpath(link)).toBe(await realpath(canonicalSemantic));
+    // The shared model file is reachable through the link.
+    expect(
+      await readFile(join(link, "models", "all-MiniLM-L6-v2", "model.bin"), "utf8"),
+    ).toBe("weights");
+  });
+
+  it("rejects Kiro launch when the kiro-cli SSO session is missing", async () => {
+    const fixture = await sandboxFixture("kiro");
+    const ambientHome = await mkdtemp(join(tmpdir(), "paperclip-kiro-home-"));
+    temporaryDirectories.push(ambientHome);
+    await mkdir(join(ambientHome, ".local", "share"), { recursive: true });
+    await expect(
+      prepareAcpxRuntimeSandbox({
+        binding: fixture.binding,
+        agent: "kiro",
+        environment: { HOME: ambientHome },
+      }),
+    ).rejects.toThrow(/SSO session is missing or empty/);
   });
 
   it.each(["claude-sonnet-5", "sonnet", "custom-deployment-id"])(
@@ -385,7 +448,7 @@ describe("ACPX runtime sandbox", () => {
   );
 });
 
-async function sandboxFixture(agent: "pi" | "claude" | "codex" | "grok" | "cursor" | "copilot") {
+async function sandboxFixture(agent: "pi" | "claude" | "codex" | "grok" | "cursor" | "copilot" | "kiro") {
   const root = await mkdtemp(join(tmpdir(), "paperclip-acpx-sandbox-"));
   temporaryDirectories.push(root);
   const workspace = join(root, "workspace");
@@ -398,6 +461,7 @@ async function sandboxFixture(agent: "pi" | "claude" | "codex" | "grok" | "curso
     codex: "gpt-5.6-sol",
     cursor: "provider-model-cursor",
     copilot: "provider-model-copilot",
+    kiro: "auto",
   } as const;
   const binding = await createAcpxRecoveryBinding({
     runtimeDirectory,

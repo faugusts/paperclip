@@ -1,6 +1,7 @@
 import type { UIAdapterModule } from "./types";
 import { claudeLocalUIAdapter } from "./claude-local";
 import { codexLocalUIAdapter } from "./codex-local";
+import { kiroLocalUIAdapter } from "./kiro-local";
 import { paperclipRunnerUIAdapter } from "./paperclip-runner";
 import { cursorCloudUIAdapter } from "./cursor-cloud";
 import { cursorLocalUIAdapter } from "./cursor";
@@ -23,6 +24,16 @@ const adaptersByType = new Map<string, UIAdapterModule>();
 // Types registered at module load time — allowed to be overridden by
 // external adapters that ship their own ui-parser.js via the server.
 const builtinTypes = new Set<string>();
+
+// Builtin types that must NOT be overridden by an external ui-parser.js, even
+// when the server lists them as an external adapter. `kiro_local` is a builtin
+// whose parser is the canonical ACPX engine (the same one codex_local uses);
+// its server-side ui-parser.js is a redundant reimplementation that would load
+// in a sandboxed Web Worker. Letting the external override replace the builtin
+// reintroduces the dynamic-loader path that silently fails behind the auth
+// gate, regressing live activity. Keeping the builtin authoritative makes
+// activity render synchronously and deterministically.
+const overrideExemptBuiltins = new Set<string>(["kiro_local"]);
 
 // Original builtin adapters stored for restoration when external overrides
 // are deactivated or removed.
@@ -56,6 +67,7 @@ function registerBuiltInUIAdapters() {
   for (const adapter of [
     claudeLocalUIAdapter,
     codexLocalUIAdapter,
+    kiroLocalUIAdapter,
     paperclipRunnerUIAdapter,
     cursorCloudUIAdapter,
     geminiLocalUIAdapter,
@@ -172,6 +184,11 @@ export function syncExternalAdapters(
   for (const builtinType of builtinTypes) {
     const originalBuiltin = builtinAdaptersByType.get(builtinType);
     if (!originalBuiltin) continue;
+
+    // Some builtins are authoritative and refuse external ui-parser overrides
+    // (e.g. kiro_local uses the canonical ACPX parser already). Never swap them
+    // for the dynamic-loader bridge — that path regresses live activity.
+    if (overrideExemptBuiltins.has(builtinType)) continue;
 
     const hasExternal = allExternalTypes.has(builtinType);
     const externalEnabled = enabledExternalTypes.has(builtinType);

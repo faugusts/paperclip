@@ -196,6 +196,17 @@ impl AcpxProviderDescriptor {
                 Some("1.0.13"),
                 "sha256:f0b698395a3704ed2ffaf84ea19bdb20c36c8a0a70b7c629c7b6ffe144e59e55",
             ),
+            "kiro" => (
+                // Model is provider-verified at session time (kiro-cli --model),
+                // not an exact-match gate; "kiro" is in the model-exemption below.
+                "auto",
+                "builtin:kiro-acp",
+                "1",
+                Some("native:kiro"),
+                Some("1"),
+                // sha256 of packages/paperclip-runner/src/providers/kiro/launcher.cjs
+                "sha256:1ef65a671d4198dc81a6ef9443475671b8bc53c299d3b85b61e4979b6b9293a3",
+            ),
             _ => {
                 return Err(DurableRunnerError::invalid(
                     "ACPX agent must name a known immutable profile",
@@ -207,7 +218,7 @@ impl AcpxProviderDescriptor {
             || self.driver != "acpx_runtime"
             || self.provider_version != "0.13.1"
             || self.acpx_version != "0.13.1"
-            || (self.agent != "claude" && self.agent != "grok" && self.model != expected.0)
+            || (self.agent != "claude" && self.agent != "grok" && self.agent != "kiro" && self.model != expected.0)
             || self.model.trim().is_empty()
             || self.model.len() > 240
             || self.model.contains('\0')

@@ -119,12 +119,43 @@ export const publicMcpCapabilities: Capability[] = [
   },
   {
     name: "paperclip_create_task", write: true,
-    description: "Delegate work by creating one durable task assigned to a Paperclip agent. This may schedule autonomous execution and consume the company's configured model budget. Normal permissions, approval gates and agent availability apply. Returns immediately; retrieve progress later. Never retry with a new requestId after an uncertain result.",
-    schema: z.object({ ...company, requestId, title: z.string().trim().min(1).max(200), description: z.string().max(50000), assigneeAgentId: z.uuid(), projectId: z.uuid().optional() }).strict(),
+    description: "Delegate work by creating one durable task assigned to a Paperclip agent. This may schedule autonomous execution and consume the company's configured model budget. Normal permissions, approval gates and agent availability apply. Returns immediately; retrieve progress later. Never retry with a new requestId after an uncertain result. Optional governance: set reviewerAgentId to require that agent to review before the task closes (runtime-enforced review stage), approverUserId to require a human board sign-off, and watchdogAgentId to have that agent watch the task's subtree and react if it stalls.",
+    schema: z.object({
+      ...company, requestId,
+      title: z.string().trim().min(1).max(200),
+      description: z.string().max(50000),
+      assigneeAgentId: z.uuid(),
+      projectId: z.uuid().optional(),
+      reviewerAgentId: z.uuid().optional().describe("Agent that must review (approve/request changes) before the task reaches done. Runtime-enforced review stage. Do not set the assignee as its own reviewer."),
+      approverUserId: z.uuid().optional().describe("Board user that must give final sign-off after review. Use for sensitive/irreversible work (auth, RLS, minor data, structural irreversibilities)."),
+      watchdogAgentId: z.uuid().optional().describe("Agent that watches this task's subtree and is woken to act if it stalls. Do not set the assignee as its own watchdog."),
+      watchdogInstructions: z.string().max(4000).optional().describe("Optional instructions for the watchdog agent."),
+    }).strict(),
     run: async (p, a, api, origin) => {
+      // Build a runtime-enforced executionPolicy from the high-level governance
+      // fields. Review stage first, then approval stage (review -> approval ->
+      // done). The runtime excludes the executor from reviewing/approving its
+      // own work, so a mistaken self-assignment is rejected downstream.
+      type Participant = { type: "agent"; agentId: string } | { type: "user"; userId: string };
+      type Stage = { type: "review" | "approval"; participants: Participant[] };
+      const stages: Stage[] = [];
+      const reviewerAgentId = a.reviewerAgentId as string | undefined;
+      const approverUserId = a.approverUserId as string | undefined;
+      const watchdogAgentId = a.watchdogAgentId as string | undefined;
+      const watchdogInstructions = a.watchdogInstructions as string | undefined;
+      if (reviewerAgentId) stages.push({ type: "review", participants: [{ type: "agent", agentId: reviewerAgentId }] });
+      if (approverUserId) stages.push({ type: "approval", participants: [{ type: "user", userId: approverUserId }] });
+      const executionPolicy = stages.length > 0
+        ? { mode: "normal" as const, commentRequired: true, stages }
+        : undefined;
+      const watchdog = watchdogAgentId
+        ? { agentId: watchdogAgentId, ...(watchdogInstructions ? { instructions: watchdogInstructions } : {}) }
+        : undefined;
       const result = await api(p, "POST", `/companies/${a.companyId}/issues`, {
         title: a.title, description: a.description, assigneeAgentId: a.assigneeAgentId,
         ...(a.projectId ? { projectId: a.projectId } : {}), status: "todo",
+        ...(executionPolicy ? { executionPolicy } : {}),
+        ...(watchdog ? { watchdog } : {}),
         idempotencyKey: `mcp:${hashMcpSecret(p.grant.companyId + ":" + p.grant.userId)}:${a.requestId}`,
       });
       return { task: pick(result, taskFields), url: origin + "/" + pathId(p.company.issuePrefix) + "/issues/" + pathId(object(result).identifier ?? object(result).id),

@@ -112,6 +112,20 @@ export const QUALIFIED_ACPX_PROFILES: Readonly<
     reportedModelId: "gpt-5.6-sol",
     permissionPolicy: "interactive",
   },
+  kiro: {
+    driverKind: ACPX_DRIVER_KIND, protocolVersion: ACPX_DRIVER_PROTOCOL_VERSION,
+    acpxVersion: QUALIFIED_ACPX_VERSION, agent: "kiro", agentProfileVersion: 1,
+    // Builtin native distribution (like grok): a digested launcher.cjs that
+    // execve's the digest-verified kiro-cli as an ACP server. The kiro-cli
+    // binary digest is provisioned per build (see verifyProvisionedKiroExecutable).
+    agentServerPackage: "builtin:kiro-acp", agentServerVersion: "1",
+    agentRuntimePackage: "native:kiro", agentRuntimeVersion: "1",
+    // sha256 of src/providers/kiro/launcher.cjs (stable, versioned with us).
+    commandDigest: "sha256:1ef65a671d4198dc81a6ef9443475671b8bc53c299d3b85b61e4979b6b9293a3",
+    // Model is provider-verified at session time; kiro-cli selects via --model.
+    qualificationModel: "auto", reportedModelId: "auto", permissionPolicy: "interactive",
+    modelPolicy: "explicit-provider-verified",
+  },
 });
 
 export function resolveQualifiedAcpxProfile(

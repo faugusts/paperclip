@@ -508,7 +508,16 @@ export class AcpxRuntimeHost {
       toolBridge = options.semanticTools
         ? await acquireAbortableAdmissionResource({
             signal: options.signal,
-            acquire: () => startRunnerToolBridge(options.semanticTools!),
+            acquire: () =>
+              startRunnerToolBridge({
+                ...options.semanticTools!,
+                // Kiro's model backend (CodeWhisperer) rejects a tool whose
+                // input_schema has a top-level oneOf/allOf/anyOf. Advertise
+                // sanitized schemas to it; validators keep the originals.
+                ...(options.agent === "kiro"
+                  ? { stripTopLevelSchemaCombinators: true }
+                  : {}),
+              }),
             resource: "tool_bridge",
             releaseLate: (lateToolBridge) => lateToolBridge.close(),
             reportFailure: (failure) =>

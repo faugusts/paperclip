@@ -4909,7 +4909,11 @@ export async function buildPaperclipRuntimeMcpServers(input: {
       subjectId: input.runId,
       clientLabel: `${input.agent.name} heartbeat run`,
       ownerNote: `Short-lived runtime MCP token for heartbeat run ${input.runId}.`,
-      allowedActions: ["tools/list", "tools/call"],
+      // Read-only context actions (resources/prompts) are safe: with no
+      // fully-assigned external MCP connection they return an empty list, not a
+      // permission error. Keeping them out made list_resources/list_prompts
+      // (always advertised in tools/list) fail with gateway_token_action_denied.
+      allowedActions: ["tools/list", "tools/call", "resources/list", "resources/read", "prompts/list", "prompts/get"],
       expiresAt: new Date(Date.now() + 60 * 60 * 1_000),
     },
     actor: { agentId: input.agent.id },
@@ -5230,7 +5234,12 @@ export async function createManagedMcpRunConfig(input: {
         subjectId: input.runId,
         clientLabel: `${input.agent.name} managed local adapter`,
         ownerNote: `Short-lived Paperclip-managed MCP token for heartbeat run ${input.runId}.`,
-        allowedActions: ["tools/list", "tools/call"],
+        // Include the read-only context actions (resources/prompts). They are
+        // safe by construction: with no fully-assigned external MCP connection
+        // they return an empty list, never a permission error. Omitting them
+        // made the always-exposed list_resources/list_prompts tools fail with
+        // gateway_token_action_denied instead of returning empty.
+        allowedActions: ["tools/list", "tools/call", "resources/list", "resources/read", "prompts/list", "prompts/get"],
         expiresAt,
       },
       actor: { agentId: input.agent.id },
@@ -20649,7 +20658,12 @@ export function heartbeatService(
       }
       const taskKey = deriveTaskKeyWithHeartbeatFallback(context, null);
       const sessionCodec = getAdapterSessionCodec(agent.adapterType);
-      const issueId = readNonEmptyString(context.issueId);
+      // Native runs persist their bound issue on the run row (nativeIssueId). A
+      // recovery/timer cycle can re-enter dispatch with a context that lost
+      // issueId; fall back to the run's nativeIssueId (same idiom as the orphan
+      // sweep at getIssueExecutionContext callers) so a native run never loses
+      // its issue — otherwise the native mode gate rejects it as workMode-less.
+      const issueId = readNonEmptyString(context.issueId) ?? readNonEmptyString(run.nativeIssueId);
       let issueContext = issueId
         ? await getIssueExecutionContext(agent.companyId, issueId)
         : null;
@@ -25043,6 +25057,15 @@ export function heartbeatService(
             if (authToken && configuredPaperclipApiBaseUrl() && issueRef) {
               runtimeMcpServers.unshift({ name: "Paperclip projects", url: `${paperclipApiBaseUrl()}/api/mcp/project-tools`,
                 token: authToken, connectionId: "paperclip-project-tools" });
+            }
+            // Read-only, company-scoped discovery tools. Injected for ANY legacy
+            // run with a local agent JWT — including timer/heartbeat wakes that
+            // carry no issue — so the agent never wakes blind: it can always look
+            // up the tasks assigned to it, read one, and see pending approvals.
+            // Writes/task creation remain issue-bound in "Paperclip projects".
+            if (authToken && configuredPaperclipApiBaseUrl()) {
+              runtimeMcpServers.unshift({ name: "Paperclip discovery", url: `${paperclipApiBaseUrl()}/api/mcp/discovery-tools`,
+                token: authToken, connectionId: "paperclip-discovery-tools" });
             }
             const runtimeMcp = createAdapterRuntimeMcpAccess(runtimeMcpServers);
             if (runtimeTools && runtimeToolDelivery === "invocation_context") {

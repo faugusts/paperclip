@@ -3116,6 +3116,13 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
     if (issueId) void prefetchIssueThread(queryClient, issueId);
   }, [issueId, queryClient]);
   const issue = queriedIssue ?? conversation?.issue ?? draftIssue;
+  // Canonical id for all per-issue run queries (live-runs/active-run/runs).
+  // The route param (`issueId`) can be the human ref ("INT-35"); once the issue
+  // loads, `issue.id` is the UUID. The chat tab already keys by the UUID, so the
+  // shell must too — otherwise the shell polls `liveRuns("INT-35")` while the
+  // tab polls `liveRuns(<uuid>)`, two divergent keys that React Query cannot
+  // dedupe, producing a duplicate /live-runs poller for the same issue.
+  const issueQueryId = issue?.id ?? issueId;
   const resolveWritableIssueId = async () => {
     if (!conversation) return issueId!;
     const resolved = await conversation.ensureIssue();
@@ -3307,13 +3314,13 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
 
   const { data: liveRunCount = 0 } = useQuery<LiveRunForIssue[], Error, number>(
     {
-      queryKey: queryKeys.issues.liveRuns(issueId!),
-      queryFn: () => heartbeatsApi.liveRunsForIssue(issueId!),
-      enabled: !!issueId,
+      queryKey: queryKeys.issues.liveRuns(issueQueryId!),
+      queryFn: () => heartbeatsApi.liveRunsForIssue(issueQueryId!),
+      enabled: !!issueQueryId,
       refetchInterval: 3000,
       select: (runs) => runs.length,
       placeholderData: keepPreviousDataForSameQueryTail<LiveRunForIssue[]>(
-        issueId ?? "pending",
+        issueQueryId ?? "pending",
       ),
     },
   );
@@ -3323,14 +3330,14 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
     Error,
     boolean
   >({
-    queryKey: queryKeys.issues.activeRun(issueId!),
-    queryFn: () => heartbeatsApi.activeRunForIssue(issueId!),
+    queryKey: queryKeys.issues.activeRun(issueQueryId!),
+    queryFn: () => heartbeatsApi.activeRunForIssue(issueQueryId!),
     enabled:
-      !!issueId && (!!issue?.executionRunId || issue?.status === "in_progress"),
+      !!issueQueryId && (!!issue?.executionRunId || issue?.status === "in_progress"),
     refetchInterval: liveRunCount > 0 ? false : 3000,
     select: (run) => !!run,
     placeholderData: keepPreviousDataForSameQueryTail<ActiveRunForIssue | null>(
-      issueId ?? "pending",
+      issueQueryId ?? "pending",
     ),
   });
   const resolvedHasActiveRun = issue
@@ -4269,8 +4276,8 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
       for (const queryKey of [
         queryKeys.issues.detail(issueId!),
         queryKeys.issues.activity(issueId!),
-        queryKeys.issues.runs(issueId!),
-        queryKeys.issues.liveRuns(issueId!),
+        queryKeys.issues.runs(issueQueryId!),
+        queryKeys.issues.liveRuns(issueQueryId!),
       ]) {
         void queryClient.invalidateQueries({ queryKey });
       }
@@ -4358,13 +4365,13 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
           queryKey: queryKeys.issues.activity(issueId!),
         }),
         queryClient.invalidateQueries({
-          queryKey: queryKeys.issues.liveRuns(issueId!),
+          queryKey: queryKeys.issues.liveRuns(issueQueryId!),
         }),
         queryClient.invalidateQueries({
-          queryKey: queryKeys.issues.activeRun(issueId!),
+          queryKey: queryKeys.issues.activeRun(issueQueryId!),
         }),
         queryClient.invalidateQueries({
-          queryKey: queryKeys.issues.runs(issueId!),
+          queryKey: queryKeys.issues.runs(issueQueryId!),
         }),
         queryClient.invalidateQueries({
           queryKey: ["issues", "tree-control-state", issueId ?? "pending"],
@@ -4408,7 +4415,7 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
     },
     onSettled: () => Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.issues.detail(issueId!) }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.issues.runs(issueId!) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.runs(issueQueryId!) }),
     ]),
   });
   const stopAndFinalizeRun = useMutation({
@@ -7901,7 +7908,7 @@ export function TaskDetailSurface({ conversation, tasksTab }: { tasksTab?: TaskS
                   onRetry: (actionId) => retryDispositionRecovery.mutateAsync(actionId).then(() => undefined),
                 }}>
                 <IssueDetailChatTab
-                  queryIssueId={issueId ?? issue.id}
+                  queryIssueId={issueQueryId}
                   onOpenSkill={handleOpenSkill}
                   browsers={browserQuery.data}
                   onOpenBrowser={(id) => { setOpenBrowserId(id); if (isMobile) setMobilePropsOpen(true); else openTaskSidePanel(); }}

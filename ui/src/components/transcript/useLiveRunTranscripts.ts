@@ -573,7 +573,18 @@ export function useLiveRunTranscripts({
     hydratedRunIds, errorsByRun, retry,
     isInitialHydrating: normalizedRuns.some((run) => canReadPersistedLog(run) && !hydratedRunIds.has(run.id)),
     hasOutputForRun(runId: string) {
-      return (chunksByRun.get(runId)?.length ?? 0) > 0 || runById.get(runId)?.hasStoredOutput === true;
+      if ((chunksByRun.get(runId)?.length ?? 0) > 0) return true;
+      const run = runById.get(runId);
+      if (!run) return false;
+      // The backend may not send `hasStoredOutput` (e.g. runsForIssue only
+      // selects logBytes), so a terminal run that already has persisted output
+      // would otherwise read as "no output" until the async log read lands —
+      // and a `succeeded` run with no output yet is dropped from the chat
+      // transcript (see issue-chat-messages buildIssueChatMessages). Treat a
+      // positive persisted byte count as stored output so the activity fold
+      // shows immediately and fills in when the log read completes.
+      if (run.hasStoredOutput === true) return true;
+      return runKnownLogBytes(run) !== null;
     },
   };
 }

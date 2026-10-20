@@ -27,6 +27,16 @@ export const ACPX_CAPABILITY_PROFILES: Readonly<Record<QualifiedAcpxAgent, AcpxC
     recovery: "session-load", usage: "reported", steering: "unsupported", followUp: "controller-queue",
     artifacts: "policy_disabled", extensionRequests: [], extensionNotifications: [],
   },
+  kiro: {
+    // Observed in the Fase 0 integration spike: ACP initialize + session/new +
+    // session/prompt + streaming session/update + MCP-http tools + loadSession.
+    // No steering/follow-up extension (Pi-only). Usage not yet verified.
+    toolRefreshOnResume: true,
+    displayName: "Kiro", qualification: "qualified", models: "explicit-provider-verified",
+    permissions: "interactive", questions: "form", plans: "native", tools: "authenticated-mcp",
+    recovery: "session-load", usage: "unverified", steering: "unsupported", followUp: "controller-queue",
+    artifacts: "policy_disabled", extensionRequests: [], extensionNotifications: [],
+  },
   codex: {
     toolRefreshOnResume: true,
     displayName: "Codex", qualification: "qualified", models: "exact-qualified",
